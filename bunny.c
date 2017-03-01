@@ -1,48 +1,81 @@
-//
-// This is a demo of vertex arrays (and normal arrays) using VBOs.
-// It uses glDrawArrays to zap the entire image to the FB in one call.
-//
-
-#include <stdio.h>
 #include <GL/gl.h>
+#include <GL/glu.h>
 #include <GL/glut.h>
+#include <GL/glx.h>
+#include <GL/glext.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <math.h>
+#include <string.h>
 
-struct point {
-    float x;
-    float y;
-    float z;
-};
 
-void setup_the_viewvol() {
-    struct point eye;
-    struct point view;
-    struct point up;
-
-    glEnable(GL_DEPTH_TEST);
-
-    // Specify the size and shape of the view volume.
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(45.0,1.0,0.1,20.0);
-
-    // Specify the position for the view volume.
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-
-    eye.x = 0.05;
-    eye.y = 0.3;
-    eye.z = 0.3;
-    view.x = -0.02;
-    view.y = 0.1;
-    view.z = 0.0;
-    up.x = 0.0;
-    up.y = 1.0;
-    up.z = 0.0;
-
-    gluLookAt(eye.x,eye.y,eye.z,view.x,view.y,view.z,up.x,up.y,up.z);
+char *read_shader_program(char *filename) {
+    FILE *fp;
+    char *content = NULL;
+    int fd, count;
+    fd = open(filename,O_RDONLY);
+    count = lseek(fd,0,SEEK_END);
+    close(fd);
+    content = (char *)calloc(1,(count+1));
+    fp = fopen(filename,"r");
+    count = fread(content,sizeof(char),count,fp);
+    content[count] = '\0';
+    fclose(fp);
+    return content;
 }
 
-void draw_stuff() {
+void set_light() {
+    float light0_ambient[] = { 1.0, 1.0, 1.0, 1.0 };
+    float light0_diffuse[] = { 1.0, 1.0, 1.0, 1.0 };
+    float light0_specular[] = { 1.0, 1.0, 1.0, 1.0 };
+    float light0_position[] = { 0.22, 0.42, 0.6, 1.0 };
+    float light0_direction[] = { -0.22, -0.22, -0.5, 1.0};
+
+    // Turn off scene default ambient.
+    glLightModelfv(GL_LIGHT_MODEL_AMBIENT,light0_ambient);
+
+    // Make specular correct for spots.
+    glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER,1);
+
+    glLightfv(GL_LIGHT0,GL_AMBIENT,light0_ambient);
+    glLightfv(GL_LIGHT0,GL_DIFFUSE,light0_diffuse);
+    glLightfv(GL_LIGHT0,GL_SPECULAR,light0_specular);
+    glLightf(GL_LIGHT0,GL_SPOT_EXPONENT,1.0);
+    glLightf(GL_LIGHT0,GL_SPOT_CUTOFF,180.0);
+    glLightf(GL_LIGHT0,GL_CONSTANT_ATTENUATION,0.5);
+    glLightf(GL_LIGHT0,GL_LINEAR_ATTENUATION,0.1);
+    glLightf(GL_LIGHT0,GL_QUADRATIC_ATTENUATION,0.01);
+    glLightfv(GL_LIGHT0,GL_POSITION,light0_position);
+    glLightfv(GL_LIGHT0,GL_SPOT_DIRECTION,light0_direction);
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
+} 
+
+void set_material() {
+    float mat_diffuse[] = {0.4,0.3,0.0,1.0};
+    float mat_specular[] = {0.9,0.1,0.0,1.0};
+    float mat_shininess[] = {10.0};
+
+    glMaterialfv(GL_FRONT,GL_DIFFUSE,mat_diffuse);
+    glMaterialfv(GL_FRONT,GL_SPECULAR,mat_specular);
+    glMaterialfv(GL_FRONT,GL_SHININESS,mat_shininess);
+}
+
+void view_volume() {
+    float eye[] = {0.05,0.5,1.0};
+    float viewpt[] = {-0.02,0.1,0.0};
+    float up[] = {0.0,1.0,0.0};
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(45.0,1.0,1.0,20.0);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    gluLookAt(eye[0],eye[1],eye[2],viewpt[0],viewpt[1],viewpt[2],up[0],up[1],up[2]);
+}
+
+void draw_bunny() {
     FILE *fp = fopen("bunnyN.ply","r");
 
     char* line = NULL;
@@ -105,74 +138,64 @@ void draw_stuff() {
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_NORMAL_ARRAY);
 
-    glClearColor(0.35,0.35,0.35,0.0);
-    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-
     glDrawElements(GL_TRIANGLES,face*3,GL_UNSIGNED_INT,face_array);
+}
+
+void renderScene(void) {
+    glClearColor(0.3,0.3,0.3,1.0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    draw_bunny();
     glutSwapBuffers();
 }
 
-void do_lights() {
-    // This is a white light.
-    float light0_ambient[] = { 0.0, 0.0, 0.0, 0.0 };
-    float light0_diffuse[] = { 1.0, 1.0, 1.0, 0.0 };
-    float light0_specular[] = { 1.0, 1.0, 1.0, 0.0 };
-    float light0_position[] = { 1.5, 2.0, 2.0, 1.0 };
-    float light0_direction[] = { -1.5, -2.0, -2.0, 1.0};
+unsigned int set_shaders() {
+    GLint vertCompiled, fragCompiled;
+    char *vs, *fs;
+    GLuint v, f, p;
+    int result = -1;
 
-    // Turn off scene default ambient.
-    glLightModelfv(GL_LIGHT_MODEL_AMBIENT,light0_ambient);
-
-    // Make specular correct for spots.
-    glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER,1);
-
-    glLightfv(GL_LIGHT0,GL_AMBIENT,light0_ambient);
-    glLightfv(GL_LIGHT0,GL_DIFFUSE,light0_diffuse);
-    glLightfv(GL_LIGHT0,GL_SPECULAR,light0_specular);
-    glLightf(GL_LIGHT0,GL_SPOT_EXPONENT,1.0);
-    glLightf(GL_LIGHT0,GL_SPOT_CUTOFF,180.0);
-    glLightf(GL_LIGHT0,GL_CONSTANT_ATTENUATION,0.5);
-    glLightf(GL_LIGHT0,GL_LINEAR_ATTENUATION,0.1);
-    glLightf(GL_LIGHT0,GL_QUADRATIC_ATTENUATION,0.01);
-    glLightfv(GL_LIGHT0,GL_POSITION,light0_position);
-    glLightfv(GL_LIGHT0,GL_SPOT_DIRECTION,light0_direction);
-
-    glEnable(GL_LIGHTING);
-    glEnable(GL_LIGHT0);
-}
-
-void do_material() {
-    float mat_ambient[] = {0.0,0.0,0.0,1.0};
-    float mat_diffuse[] = {0.9,0.9,0.1,1.0};
-    float mat_specular[] = {1.0,1.0,1.0,1.0};
-    float mat_shininess[] = {2.0};
-
-    glMaterialfv(GL_FRONT,GL_AMBIENT,mat_ambient);
-    glMaterialfv(GL_FRONT,GL_DIFFUSE,mat_diffuse);
-    glMaterialfv(GL_FRONT,GL_SPECULAR,mat_specular);
-    glMaterialfv(GL_FRONT,GL_SHININESS,mat_shininess);
+    v = glCreateShader(GL_VERTEX_SHADER);
+    f = glCreateShader(GL_FRAGMENT_SHADER);
+    vs = read_shader_program("bunny.vert");
+    fs = read_shader_program("bunny.frag");
+    glShaderSource(v,1,(const char **)&vs,NULL);
+    glShaderSource(f,1,(const char **)&fs,NULL);
+    free(vs);
+    free(fs); 
+    glCompileShader(v);
+    glCompileShader(f);
+    glGetShaderiv(f,GL_COMPILE_STATUS,&result);
+    fprintf(stderr,"%d\n",result);
+    p = glCreateProgram();
+    glAttachShader(p,f);
+    glAttachShader(p,v);
+    glLinkProgram(p);
+    glUseProgram(p);
+    return(p);
 }
 
 void getout(unsigned char key, int x, int y) {
     switch(key) {
-    case 'q':
-        exit(1);
-    default:
-        break;
+        case 'q':
+            exit(1);
+        default:
+            break;
     }
 }
 
 int main(int argc, char **argv) {
     glutInit(&argc,argv);
-    glutInitDisplayMode(GLUT_RGBA|GLUT_DEPTH|GLUT_DOUBLE);
+    glutInitDisplayMode(GLUT_DEPTH | GLUT_DOUBLE | GLUT_RGBA | GLUT_MULTISAMPLE);
+    glutInitWindowPosition(100, 100);
     glutInitWindowSize(768,768);
-    glutInitWindowPosition(100,50);
-    glutCreateWindow("my_cool_cube");
-    setup_the_viewvol();
-    do_lights();
-    do_material();
-    glutDisplayFunc(draw_stuff);
-//    glutIdleFunc(update);
+    glutCreateWindow("bunny");
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_MULTISAMPLE_ARB);
+    view_volume();
+    set_light();
+    set_material();
+    set_shaders();
+    glutDisplayFunc(renderScene);
     glutKeyboardFunc(getout);
     glutMainLoop();
     return 0;
